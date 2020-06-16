@@ -9,16 +9,14 @@ import (
 )
 
 func gracefulStop(cmd *exec.Cmd, timeout time.Duration) {
-	go func() {
-		<-time.NewTimer(timeout).C
+	time.AfterFunc(timeout, func() {
 		if !cmd.ProcessState.Exited() {
 			cmd.Process.Signal(syscall.SIGTERM)
-			go func() {
-				<-time.NewTimer(timeout).C
+			time.AfterFunc(timeout, func() {
 				if !cmd.ProcessState.Exited() {
 					cmd.Process.Kill()
 				}
-			}()
+			})
 		}
-	}()
+	})
 }

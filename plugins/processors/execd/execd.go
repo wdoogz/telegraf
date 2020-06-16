@@ -24,8 +24,8 @@ const sampleConfig = `
 `
 
 type Execd struct {
-	Command      []string
-	RestartDelay config.Duration
+	Command      []string        `toml:"command"`
+	RestartDelay config.Duration `toml:"restart_delay"`
 
 	parserConfig     *parsers.Config
 	parser           parsers.Parser
@@ -68,12 +68,12 @@ func (e *Execd) Start(acc telegraf.Accumulator) error {
 	e.acc = acc
 
 	if len(e.Command) == 0 {
-		return fmt.Errorf("FATAL no command specified")
+		return fmt.Errorf("no command specified")
 	}
 
 	e.process, err = process.New(e.Command)
 	if err != nil {
-		return fmt.Errorf("Error creating new process: %w", err)
+		return fmt.Errorf("error creating new process: %w", err)
 	}
 
 	e.process.RestartDelay = time.Duration(e.RestartDelay)
@@ -90,18 +90,20 @@ func (e *Execd) Start(acc telegraf.Accumulator) error {
 func (e *Execd) Add(m telegraf.Metric, acc telegraf.Accumulator) {
 	b, err := e.serializer.Serialize(m)
 	if err != nil {
-		log.Println(fmt.Errorf("Metric serializing error: %s", err))
+		acc.AddError(fmt.Errorf("metric serializing error: %w", err))
 		return
 	}
-	// if osStdin, ok := e.process.Stdin.(*os.File); ok {
-	// 	osStdin.SetWriteDeadline(time.Now().Add(1 * time.Second))
-	// }
 
 	_, err = e.process.Stdin.Write(b)
 	if err != nil {
-		log.Println(fmt.Errorf("Error writing to process stdin: %s", err))
+		acc.AddError(fmt.Errorf("error writing to process stdin: %w", err))
 		return
 	}
+
+	// We cannot maintain tracking metrics at the moment because input/output
+	// is done asynchronously and we don't have any metric metadata to tie the
+	// output metric back to the original input metric.
+	m.Drop()
 }
 
 func (e *Execd) Stop() error {

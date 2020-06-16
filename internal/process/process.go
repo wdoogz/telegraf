@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os/exec"
 	"sync"
@@ -37,17 +38,17 @@ func New(command []string) (*Process, error) {
 	var err error
 	p.Stdin, err = p.Cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("Error opening stdin pipe: %s", err)
+		return nil, fmt.Errorf("error opening stdin pipe: %w", err)
 	}
 
 	p.Stdout, err = p.Cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("Error opening stdout pipe: %s", err)
+		return nil, fmt.Errorf("error opening stdout pipe: %w", err)
 	}
 
 	p.Stderr, err = p.Cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("Error opening stderr pipe: %s", err)
+		return nil, fmt.Errorf("error opening stderr pipe: %w", err)
 	}
 
 	return p, nil
@@ -66,7 +67,7 @@ func (p *Process) Start() error {
 
 	go func() {
 		if err := p.cmdLoop(ctx); err != nil {
-			log.Printf("Process quit with message: %s", err.Error())
+			log.Printf("E! [agent] Process quit with message: %v", err)
 		}
 		p.mainLoopWg.Done()
 	}()
@@ -93,28 +94,22 @@ func (p *Process) cmdStart() error {
 
 // cmdLoop watches an already running process, restarting it when appropriate.
 func (p *Process) cmdLoop(ctx context.Context) error {
-	for {
-		// Use a buffered channel to ensure goroutine below can exit
-		// if `ctx.Done` is selected and nothing reads on `done` anymore
-		done := make(chan error, 1)
-		go func() {
-			done <- p.cmdWait()
-		}()
+	go func() {
+		<-ctx.Done()
+		if p.Stdin != nil {
+			p.Stdin.Close()
+			gracefulStop(p.Cmd, 5*time.Second)
+		}
+	}()
 
-		select {
-		case <-ctx.Done():
-			if p.Stdin != nil {
-				p.Stdin.Close()
-				gracefulStop(p.Cmd, 5*time.Second)
-			}
+	for {
+		err := p.cmdWait()
+		if isQuitting(ctx) {
+			log.Printf("Process %s shut down", p.Cmd.Path)
 			return nil
-		case err := <-done:
-			log.Printf("Process %s terminated: %s", p.Cmd.Path, err)
-			if isQuitting(ctx) {
-				return err
-			}
 		}
 
+		log.Printf("Process %s terminated: %v", p.Cmd.Path, err)
 		log.Printf("Restarting in %s...", time.Duration(p.RestartDelay))
 
 		select {
@@ -132,31 +127,33 @@ func (p *Process) cmdLoop(ctx context.Context) error {
 func (p *Process) cmdWait() error {
 	var wg sync.WaitGroup
 
-	if p.ReadStdoutFn != nil {
-		wg.Add(1)
-		go func() {
-			p.ReadStdoutFn(p.Stdout)
-			wg.Done()
-		}()
+	if p.ReadStdoutFn == nil {
+		p.ReadStdoutFn = defaultReadPipe
+	}
+	if p.ReadStderrFn == nil {
+		p.ReadStderrFn = defaultReadPipe
 	}
 
-	if p.ReadStderrFn != nil {
-		wg.Add(1)
-		go func() {
-			p.ReadStderrFn(p.Stderr)
-			wg.Done()
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		p.ReadStdoutFn(p.Stdout)
+		wg.Done()
+	}()
+
+	wg.Add(1)
+	go func() {
+		p.ReadStderrFn(p.Stderr)
+		wg.Done()
+	}()
 
 	wg.Wait()
 	return p.Cmd.Wait()
 }
 
 func isQuitting(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	default:
-		return false
-	}
+	return ctx.Err() != nil
+}
+
+func defaultReadPipe(r io.Reader) {
+	io.Copy(ioutil.Discard, r)
 }

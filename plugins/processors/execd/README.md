@@ -1,73 +1,109 @@
 # Execd Processor Plugin
 
-The `execd` processor plugin runs an external program as a separate process and pipes metrics in to the process's STDIN and reads processed metrics from its STDOUT. 
-The programs must output metrics in any one of the accepted 
-[Processor Data Formats](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md) on its standard output.
-
-The `signal` can be configured to send a signal the running daemon on each collection interval.
+The `execd` processor plugin runs an external program as a separate process and
+pipes metrics in to the process's STDIN and reads processed metrics from its STDOUT.
+The programs must accept influx line protocol on standard in (STDIN) and output
+metrics in influx line protocol to standard output (STDOUT).
 
 Program output on standard error is mirrored to the telegraf log.
+
+### Caveats
+
+- Metrics with tracking will be considered "delivered" as soon as they are passed
+  to the external process. There is currently no way to match up which metric
+  coming out of the execd process relates to which metric going in (keep in mind
+  that processors can add and drop metrics, and that this is all done 
+  asynchronously).
+- it's not currently possible to use a data_format other than "influx", due to
+  the requirement that it is serialize-parse symmetrical and does not lose any
+  critical type data.
 
 ### Configuration:
 
 ```toml
 [[processor.execd]]
   ## Program to run as daemon
-  command = ["telegraf-smartctl", "-d", "/dev/sda"]
+  command = ["/path/to/your_program", "arg1", "arg2"]
 
   ## Delay before the process is restarted after an unexpected termination
-  restart_delay = "10s"
-
-  ## Data format your plugin will consume AND output. 
-  ## Must be supported by both a serializer and a parser!
-  ## 
-  ## Each data format has its own unique set of configuration options, read
-  ## more about them here:
-  ## https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md
-  ## https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_OUTPUT.md
-  ## 
-  ## This should probably be either "json" or "influx"
-  data_format = "json"
+  # restart_delay = "10s"
 ```
 
 ### Example
 
-##### Go daemon using SIGHUP
+#### Go daemon example
+
+This go daemon reads a metric from stdin, multiplies the "count" field by 2,
+and writes the metric back out.
 
 ```go
 package main
 
 import (
-    "fmt"
-    "os"
-    "os/signal"
-    "syscall"
+	"fmt"
+	"os"
+
+	"github.com/influxdata/telegraf/metric"
+	"github.com/influxdata/telegraf/plugins/parsers/influx"
+	"github.com/influxdata/telegraf/plugins/serializers"
 )
 
 func main() {
-    c := make(chan os.Signal, 1)
-    signal.Notify(c, syscall.SIGHUP)
+	parser := influx.NewStreamParser(os.Stdin)
+	serializer, _ := serializers.NewInfluxSerializer()
 
-    counter := 0
+	for {
+		metric, err := parser.Next()
+		if err != nil {
+			if err == influx.EOF {
+				return // stream ended
+			}
+			if parseErr, isParseError := err.(*influx.ParseError); isParseError {
+				fmt.Fprintf(os.Stderr, "parse ERR %v\n", parseErr)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "ERR %v\n", err)
+			os.Exit(1)
+		}
 
-    for {
-        <-c
-
-        fmt.Printf("counter_go count=%d\n", counter)
-        counter++
-    }
+		c, found := metric.GetField("count")
+		if !found {
+			fmt.Fprintf(os.Stderr, "metric has no count field\n")
+			os.Exit(1)
+		}
+		switch t := c.(type) {
+		case float64:
+			t *= 2
+			metric.AddField("count", t)
+		case int64:
+			t *= 2
+			metric.AddField("count", t)
+		default:
+			fmt.Fprintf(os.Stderr, "count is not an unknown type, it's a %T\n", c)
+			os.Exit(1)
+		}
+		b, err := serializer.Serialize(metric)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERR %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprint(os.Stdout, string(b))
+	}
 }
-
 ```
+
+to run it, you'd build the binary using go, eg `go build -o multiplier.exe main.go`
 
 ```toml
 [[processors.execd]]
-  command = ["plugins/processors/execd/examples/count.exe"]
+  command = ["multiplier.exe"]
 ```
 
-- [Ruby daemon](./examples/multiplier.rb)
+#### Ruby daemon using SIGHUP
+
+- See [Ruby daemon](./examples/multiplier_line_protocol/multiplier_line_protocol.rb)
 
 ```toml
 [[processors.execd]]
-  command = ["plugins/processors/execd/examples/count.rb"]
+  command = ["ruby", "plugins/processors/execd/examples/multiplier_line_protocol/multiplier_line_protocol.rb"]
 ```
