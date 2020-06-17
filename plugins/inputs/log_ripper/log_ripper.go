@@ -11,6 +11,7 @@ import (
 
 // RipperStruct is the base struct for the config file
 type RipperStruct struct {
+	x             int
 	LogFiles      []string `toml:"log_files"`
 	RegexOverride []string `toml:"regex"`
 }
@@ -34,14 +35,13 @@ func (_ *RipperStruct) SampleConfig() string {
 
 // Gather does this
 func (rs *RipperStruct) Gather(acc telegraf.Accumulator) error {
-	var totalError int = 0
 	for _, lFile := range rs.LogFiles {
-		totalError = parseLogFile(lFile)
+		rs.x = parseLogFile(lFile)
 		tags := map[string]string{
 			"FilePath": lFile,
 		}
 		fields := map[string]interface{}{
-			"total_errors": totalError,
+			"total_errors": rs.x,
 		}
 		acc.AddFields("logErrors", fields, tags)
 	}
@@ -59,5 +59,6 @@ func parseLogFile(filename string) int {
 }
 
 func init() {
-	inputs.Add("logripper", func() telegraf.Input { return &RipperStruct{} })
+	x := 0
+	inputs.Add("log_ripper", func() telegraf.Input { return &RipperStruct{x: x} })
 }
