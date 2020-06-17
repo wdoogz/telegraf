@@ -1,4 +1,4 @@
-package log_ripper
+package logripper
 
 import (
 	"io/ioutil"
@@ -10,8 +10,8 @@ import (
 
 // RipperStruct is the base struct for the config file
 type RipperStruct struct {
-	LogFiles      []string `toml:log_files`
-	RegexOverride []string `toml:regex`
+	LogFiles      []string `toml:"log_files"`
+	RegexOverride []string `toml:"regex"`
 }
 
 // Description gives a description
@@ -33,8 +33,8 @@ func (_ *RipperStruct) SampleConfig() string {
 
 var baseRegex = "[eE][rR]{2}[oO][rR]"
 
-// LogFileStats does this
-func (rs *RipperStruct) LogFileStats(acc telegraf.Accumulator) error {
+// Gather does this
+func (rs *RipperStruct) Gather(acc telegraf.Accumulator) error {
 	var totalError int = 0
 	for _, lFile := range rs.LogFiles {
 		totalError = parseLogFile(lFile)
