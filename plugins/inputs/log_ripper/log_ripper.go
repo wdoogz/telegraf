@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
 // RipperStruct is the base struct for the config file
@@ -31,8 +32,6 @@ func (_ *RipperStruct) SampleConfig() string {
 	return ripperSampleConfig
 }
 
-var baseRegex = "[eE][rR]{2}[oO][rR]"
-
 // Gather does this
 func (rs *RipperStruct) Gather(acc telegraf.Accumulator) error {
 	var totalError int = 0
@@ -57,4 +56,8 @@ func parseLogFile(filename string) int {
 	}
 	results := r.FindAllString(string(logFile), -1)
 	return len(results)
+}
+
+func init() {
+	inputs.Add("logripper", func() telegraf.Input { return &RipperStruct{} })
 }
